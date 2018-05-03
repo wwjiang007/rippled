@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/app/main/Application.h>
 #include <ripple/basics/StringUtilities.h>
 #include <ripple/net/RPCCall.h>
@@ -36,7 +35,7 @@
 #include <ripple/protocol/types.h>
 #include <ripple/rpc/ServerHandler.h>
 #include <ripple/beast/core/LexicalCast.h>
-#include <boost/beast/core/string.hpp>
+#include <beast/core/string.hpp>
 #include <boost/asio/streambuf.hpp>
 #include <boost/optional.hpp>
 #include <boost/regex.hpp>
@@ -82,33 +81,6 @@ std::string createHTTPPost (
     s << "\r\n" << strMsg;
 
     return s.str ();
-}
-
-static
-boost::optional<std::uint64_t>
-to_uint64(std::string const& s)
-{
-    if (s.empty())
-        return boost::none;
-
-    for (auto c : s)
-    {
-        if (!isdigit(c))
-            return boost::none;
-    }
-
-    try
-    {
-        std::size_t pos{};
-        auto const drops = std::stoul(s, &pos);
-        if (s.size() != pos)
-            return boost::none;
-        return drops;
-    }
-    catch (std::exception const&)
-    {
-        return boost::none;
-    }
 }
 
 class RPCParser
@@ -173,7 +145,7 @@ private:
     {
         Json::Value v (Json::objectValue);
 
-        if (jvParams.isArray () && (jvParams.size () > 0))
+        if (jvParams.isArray() && (jvParams.size () > 0))
             v[jss::params] = jvParams;
 
         return v;
@@ -452,9 +424,9 @@ private:
             // This may look reversed, but it's intentional: jss::vetoed
             // determines whether an amendment is vetoed - so "reject" means
             // that jss::vetoed is true.
-            if (boost::beast::detail::iequals(action, "reject"))
+            if (beast::detail::iequals(action, "reject"))
                 jvRequest[jss::vetoed] = Json::Value (true);
-            else if (boost::beast::detail::iequals(action, "accept"))
+            else if (beast::detail::iequals(action, "accept"))
                 jvRequest[jss::vetoed] = Json::Value (false);
             else
                 return rpcError (rpcINVALID_PARAMS);
@@ -513,7 +485,7 @@ private:
 
         if (reader.parse (jvParams[1u].asString (), jvRequest))
         {
-            if (!jvRequest.isObject ())
+            if (!jvRequest.isObjectOrNull ())
                 return rpcError (rpcINVALID_PARAMS);
 
             jvRequest[jss::method] = jvParams[0u];
@@ -544,7 +516,8 @@ private:
                 jv.isMember(jss::id) && jv.isMember(jss::method))
             {
                 if (jv.isMember(jss::params) &&
-                      !(jv[jss::params].isArray() || jv[jss::params].isObject()))
+                      !(jv[jss::params].isNull() || jv[jss::params].isArray() ||
+                                                    jv[jss::params].isObject()))
                     return false;
                 return true;
             }
@@ -722,7 +695,7 @@ private:
         std::string const strPk = jvParams[0u].asString ();
 
         bool const validPublicKey = [&strPk]{
-            if (parseBase58<PublicKey> (TokenType::TOKEN_ACCOUNT_PUBLIC, strPk))
+            if (parseBase58<PublicKey> (TokenType::AccountPublic, strPk))
                 return true;
 
             std::pair<Blob, bool> pkHex(strUnHex (strPk));
@@ -775,7 +748,7 @@ private:
             if (i < 2)
             {
                 if (parseBase58<PublicKey> (
-                        TokenType::TOKEN_ACCOUNT_PUBLIC, strParam) ||
+                        TokenType::AccountPublic, strParam) ||
                     parseBase58<AccountID> (strParam) ||
                     parseGenericSeed (strParam))
                 {
@@ -810,7 +783,7 @@ private:
             --iCursor;
         }
 
-        if (! parseBase58<PublicKey>(TokenType::TOKEN_ACCOUNT_PUBLIC, strIdent) &&
+        if (! parseBase58<PublicKey>(TokenType::AccountPublic, strIdent) &&
             ! parseBase58<AccountID>(strIdent) &&
             ! parseGenericSeed(strIdent))
             return rpcError (rpcACT_MALFORMED);
@@ -1040,6 +1013,15 @@ private:
         return jvRequest;
     }
 
+    // server_info [counters]
+    Json::Value parseServerInfo (Json::Value const& jvParams)
+    {
+        Json::Value     jvRequest (Json::objectValue);
+        if (jvParams.size() == 1 && jvParams[0u].asString() == "counters")
+            jvRequest[jss::counters] = true;
+        return jvRequest;
+    }
+
 public:
     //--------------------------------------------------------------------------
 
@@ -1115,8 +1097,8 @@ public:
             {   "sign_for",             &RPCParser::parseSignFor,               3,  4   },
             {   "submit",               &RPCParser::parseSignSubmit,            1,  3   },
             {   "submit_multisigned",   &RPCParser::parseSubmitMultiSigned,     1,  1   },
-            {   "server_info",          &RPCParser::parseAsIs,                  0,  0   },
-            {   "server_state",         &RPCParser::parseAsIs,                  0,  0   },
+            {   "server_info",          &RPCParser::parseServerInfo,            0,  1   },
+            {   "server_state",         &RPCParser::parseServerInfo,            0,  1   },
             {   "stop",                 &RPCParser::parseAsIs,                  0,  0   },
             {   "transaction_entry",    &RPCParser::parseTransactionEntry,      2,  2   },
             {   "tx",                   &RPCParser::parseTx,                    1,  2   },
@@ -1196,6 +1178,8 @@ namespace
 
 struct RPCCallImp
 {
+    explicit RPCCallImp() = default;
+
     // VFALCO NOTE Is this a to-do comment or a doc comment?
     // Place the async result somewhere useful.
     static void callRPCHandler (Json::Value* jvOutput, Json::Value const& jvInput)
@@ -1492,7 +1476,7 @@ void fromNetwork (
     }
 
     // HTTP basic authentication
-    auto const auth = boost::beast::detail::base64_encode(strUsername + ":" + strPassword);
+    auto const auth = beast::detail::base64_encode(strUsername + ":" + strPassword);
 
     std::map<std::string, std::string> mapRequestHeaders;
 

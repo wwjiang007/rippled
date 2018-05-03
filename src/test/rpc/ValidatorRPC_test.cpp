@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/app/main/BasicApp.h>
 #include <ripple/app/misc/ValidatorSite.h>
 #include <ripple/beast/unit_test.h>
@@ -25,7 +24,7 @@
 #include <ripple/json/json_value.h>
 #include <ripple/protocol/JsonFields.h>
 #include <ripple/protocol/Sign.h>
-#include <boost/beast/core/detail/base64.hpp>
+#include <beast/core/detail/base64.hpp>
 #include <test/jtx.h>
 #include <test/jtx/TrustedPublisherServer.h>
 
@@ -76,7 +75,7 @@ class ValidatorRPC_test : public beast::unit_test::suite
         Serializer s;
         st.add(s);
 
-        return boost::beast::detail::base64_encode(
+        return beast::detail::base64_encode(
             std::string(static_cast<char const*>(s.data()), s.size()));
     }
 
@@ -183,7 +182,7 @@ public:
         using address_type = boost::asio::ip::address;
 
         auto toStr = [](PublicKey const& publicKey) {
-            return toBase58(TokenType::TOKEN_NODE_PUBLIC, publicKey);
+            return toBase58(TokenType::NodePublic, publicKey);
         };
 
         // Publisher manifest/signing keys
@@ -308,11 +307,11 @@ public:
 
             env.app().validatorSites().start();
             env.app().validatorSites().join();
-            std::set<PublicKey> startKeys;
+            hash_set<NodeID> startKeys;
             for (auto const& val : validators)
-                startKeys.insert(val.masterPublic);
+                startKeys.insert(calcNodeID(val.masterPublic));
 
-            env.app().validators().onConsensusStart(startKeys);
+            env.app().validators().updateTrusted(startKeys);
 
             {
                 auto const jrr = env.rpc("server_info")[jss::result];

@@ -99,6 +99,8 @@ public:
     class key_equal
     {
     public:
+        explicit key_equal() = default;
+
         bool operator() (base_uint const& lhs, base_uint const& rhs) const
         {
             return lhs == rhs;
@@ -115,7 +117,10 @@ private:
               constructor: something like base_uint(0) is ambiguous.
     */
     // NIKB TODO Remove the need for this constructor.
-    struct VoidHelper {};
+    struct VoidHelper
+    {
+        explicit VoidHelper() = default;
+    };
 
     explicit base_uint (void const* data, VoidHelper)
     {
@@ -354,19 +359,19 @@ public:
     */
     bool SetHex (const char* psz, bool bStrict = false)
     {
+        // Find beginning.
+        auto pBegin = reinterpret_cast<const unsigned char*>(psz);
         // skip leading spaces
         if (!bStrict)
-            while (isspace (*psz))
-                psz++;
+            while (isspace(*pBegin))
+                pBegin++;
 
         // skip 0x
-        if (!bStrict && psz[0] == '0' && tolower (psz[1]) == 'x')
-            psz += 2;
-
-        const unsigned char* pEnd   = reinterpret_cast<const unsigned char*> (psz);
-        const unsigned char* pBegin = pEnd;
+        if (!bStrict && pBegin[0] == '0' && tolower(pBegin[1]) == 'x')
+            pBegin += 2;
 
         // Find end.
+        auto pEnd = pBegin;
         while (charUnHex(*pEnd) != -1)
             pEnd++;
 
@@ -578,7 +583,9 @@ namespace beast
 template <std::size_t Bits, class Tag>
 struct is_uniquely_represented<ripple::base_uint<Bits, Tag>>
     : public std::true_type
-    {};
+    {
+        explicit is_uniquely_represented() = default;
+    };
 
 }  // beast
 

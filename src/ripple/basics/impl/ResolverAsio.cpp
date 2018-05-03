@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/basics/ResolverAsio.h>
 #include <ripple/basics/Log.h>
 #include <ripple/beast/net/IPAddressConversion.h>
@@ -242,7 +241,7 @@ public:
 
         // If we get an error message back, we don't return any
         // results that we may have gotten.
-        if (ec == 0)
+        if (!ec)
         {
             while (iter != boost::asio::ip::tcp::resolver::iterator())
             {
@@ -279,7 +278,7 @@ public:
         // Attempt to find the first and last valid port separators
         auto const find_port_separator = [](char const c) -> bool
         {
-            if (std::isspace (c))
+            if (std::isspace (static_cast<unsigned char>(c)))
                 return true;
 
             if (c == ':')

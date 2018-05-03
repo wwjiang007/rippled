@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/app/paths/impl/Steps.h>
 #include <ripple/app/paths/Credit.h>
 #include <ripple/app/paths/NodeDirectory.h>
@@ -197,6 +196,8 @@ class BookPaymentStep
     : public BookStep<TIn, TOut, BookPaymentStep<TIn, TOut>>
 {
 public:
+    explicit BookPaymentStep() = default;
+
     using BookStep<TIn, TOut, BookPaymentStep<TIn, TOut>>::BookStep;
     using BookStep<TIn, TOut, BookPaymentStep<TIn, TOut>>::qualityUpperBound;
 

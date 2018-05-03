@@ -17,11 +17,10 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/basics/contract.h>
 #include <ripple/nodestore/Factory.h>
 #include <ripple/nodestore/Manager.h>
-#include <boost/beast/core/string.hpp>
+#include <beast/core/string.hpp>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -31,6 +30,8 @@ namespace NodeStore {
 
 struct MemoryDB
 {
+    explicit MemoryDB() = default;
+
     std::mutex mutex;
     bool open = false;
     std::map <uint256 const, std::shared_ptr<NodeObject>> table;
@@ -40,7 +41,7 @@ class MemoryFactory : public Factory
 {
 private:
     std::mutex mutex_;
-    std::map <std::string, MemoryDB, boost::beast::iless> map_;
+    std::map <std::string, MemoryDB, beast::iless> map_;
 
 public:
     MemoryFactory();

@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/ledger/CashDiff.h>
 #include <ripple/ledger/detail/ApplyStateTable.h>
 #include <ripple/protocol/st.h>
@@ -31,6 +30,8 @@ namespace detail {
 // Data structure that summarize cash changes in a single ApplyStateTable.
 struct CashSummary
 {
+    explicit CashSummary() = default;
+
     // Sorted vectors.  All of the vectors fill in for std::maps.
     std::vector<std::pair<
         AccountID, XRPAmount>> xrpChanges;

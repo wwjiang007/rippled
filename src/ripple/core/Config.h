@@ -24,7 +24,7 @@
 #include <ripple/basics/base_uint.h>
 #include <ripple/protocol/SystemParameters.h> // VFALCO Breaks levelization
 #include <ripple/beast/net/IPEndpoint.h>
-#include <boost/beast/core/string.hpp>
+#include <beast/core/string.hpp>
 #include <ripple/beast/utility/Journal.h>
 #include <boost/asio/ip/tcp.hpp> // VFALCO FIX: This include should not be here
 #include <boost/filesystem.hpp> // VFALCO FIX: This include should not be here
@@ -89,7 +89,9 @@ public:
 
 private:
     boost::filesystem::path CONFIG_FILE;
+public:
     boost::filesystem::path CONFIG_DIR;
+private:
     boost::filesystem::path DEBUG_LOGFILE;
 
     void load ();
@@ -110,7 +112,8 @@ private:
 
 public:
     bool doImport = false;
-    bool valShards = false;
+    bool nodeToShard = false;
+    bool validateShards = false;
     bool ELB_SUPPORT = false;
 
     std::vector<std::string>    IPS;                    // Peer IPs from rippled.cfg.

@@ -20,7 +20,7 @@
 #ifndef TEST_UNIT_TEST_MULTI_RUNNER_H
 #define TEST_UNIT_TEST_MULTI_RUNNER_H
 
-#include <boost/beast/core/static_string.hpp>
+#include <beast/include/beast/core/static_string.hpp>
 #include <beast/unit_test/global_suites.hpp>
 #include <beast/unit_test/runner.hpp>
 
@@ -78,7 +78,7 @@ struct suite_results
 
 struct results
 {
-    using static_string = boost::beast::static_string<256>;
+    using static_string = beast::static_string<256>;
     // results may be stored in shared memory. Use `static_string` to ensure
     // pointers from different memory spaces do not co-mingle
     using run_time = std::pair<static_string, typename clock_type::duration>;
@@ -163,7 +163,8 @@ class multi_runner_base
 protected:
     std::unique_ptr<boost::interprocess::message_queue> message_queue_;
 
-    void message_queue_send(std::string const& s);
+    enum class MessageType : std::uint8_t {test_start, test_end, log};
+    void message_queue_send(MessageType mt, std::string const& s);
 
 public:
     multi_runner_base();
@@ -208,7 +209,8 @@ private:
     std::ostream& os_;
     std::atomic<bool> continue_message_queue_{true};
     std::thread message_queue_thread_;
-
+    // track running suites so if a child crashes the culprit can be flagged
+    std::set<std::string> running_suites_;
 public:
     multi_runner_parent(multi_runner_parent const&) = delete;
     multi_runner_parent&
@@ -335,7 +337,7 @@ multi_runner_child::run_multi(Pred pred)
             // inform the parent
             std::stringstream s;
             s << job_index_ << ">  failed Unhandled exception in test.\n";
-            message_queue_send(s.str());
+            message_queue_send(MessageType::log, s.str());
             failed = true;
         }
     }

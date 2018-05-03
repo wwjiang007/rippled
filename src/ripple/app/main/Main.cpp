@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 
 #include <ripple/basics/Log.h>
 #include <ripple/protocol/digest.h>
@@ -167,7 +166,8 @@ void printHelp (const po::options_description& desc)
            "     ripple ...\n"
            "     ripple_path_find <json> [<ledger>]\n"
            "     version\n"
-           "     server_info\n"
+           "     server_info [counters]\n"
+           "     server_state [counters]\n"
            "     sign <private_key> <tx_json> [offline]\n"
            "     sign_for <signer_address> <signer_private_key> <tx_json> [offline]\n"
            "     stop\n"
@@ -229,9 +229,17 @@ static int runUnitTests(
         int bad_child_exits = 0;
         for(auto& c : children)
         {
-            c.wait();
-            if (c.exit_code())
+            try
+            {
+                c.wait();
+                if (c.exit_code())
+                    ++bad_child_exits;
+            }
+            catch (...)
+            {
+                // wait throws if process was terminated with a signal
                 ++bad_child_exits;
+            }
         }
 
         if (parent_runner.any_failed() || bad_child_exits)
@@ -312,7 +320,8 @@ int run (int argc, char** argv)
     ("debug", "Enable normally suppressed debug logging")
     ("fg", "Run in the foreground.")
     ("import", importText.c_str ())
-    ("shards", shardsText.c_str ())
+    ("nodetoshard", "Import node store into shards")
+    ("validateShards", shardsText.c_str ())
     ("version", "Display the build version.")
     ;
 
@@ -412,8 +421,11 @@ int run (int argc, char** argv)
     if (vm.count ("import"))
         config->doImport = true;
 
-    if (vm.count ("shards"))
-        config->valShards = true;
+    if (vm.count("nodetoshard"))
+        config->nodeToShard = true;
+
+    if (vm.count ("validateShards "))
+        config->validateShards = true;
 
     if (vm.count ("ledger"))
     {

@@ -17,17 +17,18 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/app/misc/ValidatorKeys.h>
 
 #include <ripple/app/misc/Manifest.h>
 #include <ripple/basics/Log.h>
+#include <ripple/basics/random.h>
 #include <ripple/core/Config.h>
 #include <ripple/core/ConfigSections.h>
-#include <boost/beast/core/detail/base64.hpp>
+#include <beast/core/detail/base64.hpp>
 
 namespace ripple {
 ValidatorKeys::ValidatorKeys(Config const& config, beast::Journal j)
+    : cookie{rand_int<std::uint64_t>(1, std::numeric_limits<std::uint64_t>::max())}
 {
     if (config.exists(SECTION_VALIDATOR_TOKEN) &&
         config.exists(SECTION_VALIDATION_SEED))
@@ -46,8 +47,7 @@ ValidatorKeys::ValidatorKeys(Config const& config, beast::Journal j)
             auto const pk = derivePublicKey(
                 KeyType::secp256k1, token->validationSecret);
             auto const m = Manifest::make_Manifest(
-                boost::beast::detail::base64_decode(token->manifest));
-
+                beast::detail::base64_decode(token->manifest));
             if (! m || pk != m->signingKey)
             {
                 configInvalid_ = true;
@@ -58,6 +58,7 @@ ValidatorKeys::ValidatorKeys(Config const& config, beast::Journal j)
             {
                 secretKey = token->validationSecret;
                 publicKey = pk;
+                nodeID = calcNodeID(m->masterKey);
                 manifest = std::move(token->manifest);
             }
         }
@@ -82,6 +83,7 @@ ValidatorKeys::ValidatorKeys(Config const& config, beast::Journal j)
         {
             secretKey = generateSecretKey(KeyType::secp256k1, *seed);
             publicKey = derivePublicKey(KeyType::secp256k1, secretKey);
+            nodeID = calcNodeID(publicKey);
         }
     }
 }

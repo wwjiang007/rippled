@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/app/ledger/LedgerMaster.h>
 #include <ripple/app/ledger/OpenLedger.h>
 #include <ripple/app/ledger/OrderBookDB.h>
@@ -182,12 +181,19 @@ void
 LedgerMaster::setValidLedger(
     std::shared_ptr<Ledger const> const& l)
 {
+
     std::vector <NetClock::time_point> times;
+    boost::optional<uint256> consensusHash;
 
     if (! standalone_)
     {
-        times = app_.getValidations().getTrustedValidationTimes(
-            l->info().hash);
+        auto const vals = app_.getValidations().getTrustedForLedger(l->info().hash);
+        times.reserve(vals.size());
+        for(auto const& val: vals)
+            times.push_back(val->getSignTime());
+
+        if(!vals.empty())
+            consensusHash = vals.front()->getConsensusHash();
     }
 
     NetClock::time_point signTime;
@@ -216,7 +222,7 @@ LedgerMaster::setValidLedger(
 
     app_.getOPs().updateLocalTx (*l);
     app_.getSHAMapStore().onLedgerClosed (getValidatedLedger());
-    mLedgerHistory.validatedLedger (l);
+    mLedgerHistory.validatedLedger (l, consensusHash);
     app_.getAmendmentTable().doValidatedLedger (l);
     if (!app_.getOPs().isAmendmentBlocked() &&
         app_.getAmendmentTable().hasUnsupportedEnabled ())
@@ -444,9 +450,10 @@ LedgerMaster::tryFill (
 
     std::map< std::uint32_t, std::pair<uint256, uint256> > ledgerHashes;
 
-    std::uint32_t minHas = ledger->info().seq;
-    std::uint32_t maxHas = ledger->info().seq;
+    std::uint32_t minHas = seq;
+    std::uint32_t maxHas = seq;
 
+    NodeStore::Database& nodeStore {app_.getNodeStore()};
     while (! job.shouldCancel() && seq > 0)
     {
         {
@@ -477,6 +484,16 @@ LedgerMaster::tryFill (
 
             if (it == ledgerHashes.end ())
                 break;
+
+            if (!nodeStore.fetch(ledgerHashes.begin()->second.first,
+                ledgerHashes.begin()->first))
+            {
+                // The ledger is not backed by the node store
+                JLOG(m_journal.warn()) <<
+                    "SQL DB ledger sequence " << seq <<
+                    " mismatches node store";
+                break;
+            }
         }
 
         if (it->second.first != prevHash)
@@ -504,14 +521,13 @@ LedgerMaster::getFetchPack (LedgerIndex missingIndex,
 {
     auto haveHash = getLedgerHashForHistory(
         missingIndex + 1, reason);
-    if (!haveHash)
+    if (!haveHash || haveHash->isZero())
     {
         JLOG (m_journal.error()) <<
             "No hash for fetch pack. Missing Index " <<
             std::to_string(missingIndex);
         return;
     }
-    assert(haveHash->isNonZero());
 
     // Select target Peer based on highest score.  The score is randomized
     // but biased in favor of Peers with low latency.
@@ -805,7 +821,9 @@ LedgerMaster::checkAccept (
 /** Report that the consensus process built a particular ledger */
 void
 LedgerMaster::consensusBuilt(
-    std::shared_ptr<Ledger const> const& ledger, Json::Value consensus)
+    std::shared_ptr<Ledger const> const& ledger,
+    uint256 const& consensusHash,
+    Json::Value consensus)
 {
 
     // Because we just built a ledger, we are no longer building one
@@ -815,7 +833,7 @@ LedgerMaster::consensusBuilt(
     if (standalone_)
         return;
 
-    mLedgerHistory.builtLedger (ledger, std::move (consensus));
+    mLedgerHistory.builtLedger (ledger, consensusHash, std::move (consensus));
 
     if (ledger->info().seq <= mValidLedgerSeq)
     {
@@ -1534,8 +1552,8 @@ LedgerMaster::fetchForHistory(
                 ledger = app_.getInboundLedgers().acquire(
                     *hash, missing, reason);
                 if (!ledger &&
-                    missing > NodeStore::genesisSeq &&
-                    missing != fetch_seq_)
+                    missing != fetch_seq_ &&
+                    missing > app_.getNodeStore().earliestSeq())
                 {
                     JLOG(m_journal.trace())
                         << "fetchForHistory want fetch pack " << missing;
@@ -1595,12 +1613,12 @@ LedgerMaster::fetchForHistory(
             if (reason == InboundLedger::Reason::SHARD)
                 // Do not fetch ledger sequences lower
                 // than the shard's first ledger sequence
-                fetchSz = NodeStore::DatabaseShard::firstSeq(
-                    NodeStore::DatabaseShard::seqToShardIndex(missing));
+                fetchSz = app_.getShardStore()->firstLedgerSeq(
+                    app_.getShardStore()->seqToShardIndex(missing));
             else
                 // Do not fetch ledger sequences lower
-                // than the genesis ledger sequence
-                fetchSz = NodeStore::genesisSeq;
+                // than the earliest ledger sequence
+                fetchSz = app_.getNodeStore().earliestSeq();
             fetchSz = missing >= fetchSz ?
                 std::min(ledger_fetch_size_, (missing - fetchSz) + 1) : 0;
             try
@@ -1658,7 +1676,8 @@ void LedgerMaster::doAdvance (ScopedLockType& sl)
                 {
                     ScopedLockType sl(mCompleteLock);
                     missing = prevMissing(mCompleteLedgers,
-                        mPubLedger->info().seq, NodeStore::genesisSeq);
+                        mPubLedger->info().seq,
+                        app_.getNodeStore().earliestSeq());
                 }
                 if (missing)
                 {

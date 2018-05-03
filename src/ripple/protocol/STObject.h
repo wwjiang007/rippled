@@ -251,6 +251,8 @@ private:
 
     struct Transform
     {
+        explicit Transform() = default;
+
         using argument_type = detail::STVar;
         using result_type = STBase;
 
@@ -281,7 +283,7 @@ public:
     STObject(STObject const&) = default;
     STObject (const SOTemplate & type, SField const& name);
     STObject (const SOTemplate & type, SerialIter & sit, SField const& name);
-    STObject (SerialIter& sit, SField const& name);
+    STObject (SerialIter& sit, SField const& name, int depth = 0);
     STObject (SerialIter&& sit, SField const& name)
         : STObject(sit, name)
     {

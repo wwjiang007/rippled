@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/app/paths/Credit.h>
 #include <ripple/app/paths/impl/StepChecks.h>
 #include <ripple/app/paths/impl/Steps.h>
@@ -221,6 +220,8 @@ private:
 class DirectIPaymentStep : public DirectStepI<DirectIPaymentStep>
 {
 public:
+    explicit DirectIPaymentStep() = default;
+
     using DirectStepI<DirectIPaymentStep>::DirectStepI;
     using DirectStepI<DirectIPaymentStep>::check;
 
@@ -264,6 +265,8 @@ public:
 class DirectIOfferCrossingStep : public DirectStepI<DirectIOfferCrossingStep>
 {
 public:
+    explicit DirectIOfferCrossingStep() = default;
+
     using DirectStepI<DirectIOfferCrossingStep>::DirectStepI;
     using DirectStepI<DirectIOfferCrossingStep>::check;
 

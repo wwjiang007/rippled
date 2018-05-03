@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/protocol/SField.h>
 #include <cassert>
 #include <map>
@@ -46,6 +45,8 @@ using StaticScopedLockType = std::lock_guard <std::mutex>;
 // Give this translation unit only, permission to construct SFields
 struct SField::make
 {
+    explicit make() = default;
+
     template <class ...Args>
     static SField one(SField const* p, Args&& ...args)
     {
@@ -141,6 +142,8 @@ SF_U64 const sfExchangeRate     = make::one<SF_U64::type>(&sfExchangeRate,     S
 SF_U64 const sfLowNode          = make::one<SF_U64::type>(&sfLowNode,          STI_UINT64, 7, "LowNode");
 SF_U64 const sfHighNode         = make::one<SF_U64::type>(&sfHighNode,         STI_UINT64, 8, "HighNode");
 SF_U64 const sfDestinationNode  = make::one<SF_U64::type>(&sfDestinationNode,  STI_UINT64, 9, "DestinationNode");
+SF_U64 const sfCookie           = make::one<SF_U64::type>(&sfCookie,           STI_UINT64, 10,"Cookie");
+
 
 // 128-bit
 SF_U128 const sfEmailHash = make::one<SF_U128::type>(&sfEmailHash, STI_HASH128, 1, "EmailHash");

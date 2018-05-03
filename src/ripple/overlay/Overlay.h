@@ -25,7 +25,7 @@
 #include <ripple/overlay/PeerSet.h>
 #include <ripple/server/Handoff.h>
 #include <ripple/beast/asio/ssl_bundle.h>
-#include <boost/beast/http/message.hpp>
+#include <beast/http/message.hpp>
 #include <ripple/core/Stoppable.h>
 #include <ripple/beast/utility/PropertyStream.h>
 #include <memory>
@@ -64,6 +64,8 @@ public:
 
     struct Setup
     {
+        explicit Setup() = default;
+
         std::shared_ptr<boost::asio::ssl::context> context;
         bool expire = false;
         beast::IP::Address public_ip;

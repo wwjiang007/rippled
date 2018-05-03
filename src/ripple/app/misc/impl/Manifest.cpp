@@ -26,7 +26,7 @@
 #include <ripple/json/json_reader.h>
 #include <ripple/protocol/PublicKey.h>
 #include <ripple/protocol/Sign.h>
-#include <boost/beast/core/detail/base64.hpp>
+#include <beast/core/detail/base64.hpp>
 #include <boost/regex.hpp>
 #include <numeric>
 #include <stdexcept>
@@ -57,10 +57,8 @@ Manifest::make_Manifest (std::string s)
             auto const spk = st.getFieldVL (sfSigningPubKey);
             if (! publicKeyType (makeSlice(spk)))
                 return boost::none;
-            auto const opt_sig = get (st, sfSignature);
-            if (! opt_sig)
+            if (! get (st, sfSignature))
                 return boost::none;
-
             return Manifest (std::move (s), PublicKey (makeSlice(pk)),
                 PublicKey (makeSlice(spk)), *opt_seq);
         }
@@ -83,7 +81,7 @@ logMftAct (
     std::uint32_t seq)
 {
     s << "Manifest: " << action <<
-         ";Pk: " << toBase58 (TokenType::TOKEN_NODE_PUBLIC, pk) <<
+         ";Pk: " << toBase58 (TokenType::NodePublic, pk) <<
          ";Seq: " << seq << ";";
     return s;
 }
@@ -97,7 +95,7 @@ Stream& logMftAct (
     std::uint32_t oldSeq)
 {
     s << "Manifest: " << action <<
-         ";Pk: " << toBase58 (TokenType::TOKEN_NODE_PUBLIC, pk) <<
+         ";Pk: " << toBase58 (TokenType::NodePublic, pk) <<
          ";Seq: " << seq <<
          ";OldSeq: " << oldSeq << ";";
     return s;
@@ -184,7 +182,7 @@ ValidatorToken::make_ValidatorToken(std::vector<std::string> const& tokenBlob)
         for (auto const& line : tokenBlob)
             tokenStr += beast::rfc2616::trim(line);
 
-        tokenStr = boost::beast::detail::base64_decode(tokenStr);
+        tokenStr = beast::detail::base64_decode(tokenStr);
 
         Json::Reader r;
         Json::Value token;
@@ -386,7 +384,7 @@ ManifestCache::load (
     if (! configManifest.empty())
     {
         auto mo = Manifest::make_Manifest (
-            boost::beast::detail::base64_decode(configManifest));
+            beast::detail::base64_decode(configManifest));
         if (! mo)
         {
             JLOG (j_.error()) << "Malformed validator_token in config";
@@ -421,7 +419,7 @@ ManifestCache::load (
             revocationStr += beast::rfc2616::trim(line);
 
         auto mo = Manifest::make_Manifest (
-            boost::beast::detail::base64_decode(revocationStr));
+            beast::detail::base64_decode(revocationStr));
 
         if (! mo || ! mo->revoked() ||
             applyManifest (std::move(*mo)) == ManifestDisposition::invalid)

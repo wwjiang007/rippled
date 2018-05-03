@@ -18,11 +18,12 @@
 //==============================================================================
 
 #include <ripple/app/misc/ValidatorList.h>
+#include <ripple/basics/date.h>
 #include <ripple/basics/Slice.h>
 #include <ripple/basics/StringUtilities.h>
 #include <ripple/json/json_reader.h>
 #include <ripple/protocol/JsonFields.h>
-#include <boost/beast/core/detail/base64.hpp>
+#include <beast/core/detail/base64.hpp>
 #include <boost/regex.hpp>
 
 namespace ripple {
@@ -98,14 +99,14 @@ ValidatorList::load (
 
         auto const ret = strUnHex (key);
 
-        if (! ret.second || ! ret.first.size ())
+        if (! ret.second || ! publicKeyType(makeSlice(ret.first)))
         {
             JLOG (j_.error()) <<
                 "Invalid validator list publisher key: " << key;
             return false;
         }
 
-        auto id = PublicKey(Slice{ ret.first.data (), ret.first.size() });
+        auto id = PublicKey(makeSlice(ret.first));
 
         if (validatorManifests_.revoked (id))
         {
@@ -154,7 +155,7 @@ ValidatorList::load (
         }
 
         auto const id = parseBase58<PublicKey>(
-            TokenType::TOKEN_NODE_PUBLIC, match[1]);
+            TokenType::NodePublic, match[1]);
 
         if (!id)
         {
@@ -223,14 +224,14 @@ ValidatorList::applyList (
     std::vector<std::string> manifests;
     for (auto const& val : newList)
     {
-        if (val.isObject () &&
+        if (val.isObject() &&
             val.isMember ("validation_public_key") &&
             val["validation_public_key"].isString ())
         {
             std::pair<Blob, bool> ret (strUnHex (
                 val["validation_public_key"].asString ()));
 
-            if (! ret.second || ! ret.first.size ())
+            if (! ret.second || ! publicKeyType(makeSlice(ret.first)))
             {
                 JLOG (j_.error()) <<
                     "Invalid node identity: " <<
@@ -291,7 +292,7 @@ ValidatorList::applyList (
     for (auto const& valManifest : manifests)
     {
         auto m = Manifest::make_Manifest (
-            boost::beast::detail::base64_decode(valManifest));
+            beast::detail::base64_decode(valManifest));
 
         if (! m || ! keyListings_.count (m->masterKey))
         {
@@ -321,7 +322,7 @@ ValidatorList::verify (
     std::string const& blob,
     std::string const& signature)
 {
-    auto m = Manifest::make_Manifest (boost::beast::detail::base64_decode(manifest));
+    auto m = Manifest::make_Manifest (beast::detail::base64_decode(manifest));
 
     if (! m || ! publisherLists_.count (m->masterKey))
         return ListDisposition::untrusted;
@@ -342,7 +343,7 @@ ValidatorList::verify (
         return ListDisposition::untrusted;
 
     auto const sig = strUnHex(signature);
-    auto const data = boost::beast::detail::base64_decode (blob);
+    auto const data = beast::detail::base64_decode (blob);
     if (! sig.second ||
         ! ripple::verify (
             publisherManifests_.getSigningKey(pubKey),
@@ -440,7 +441,7 @@ ValidatorList::removePublisherList (PublicKey const& publisherKey)
 
     JLOG (j_.debug()) <<
         "Removing validator list for revoked publisher " <<
-        toBase58(TokenType::TOKEN_NODE_PUBLIC, publisherKey);
+        toBase58(TokenType::NodePublic, publisherKey);
 
     for (auto const& val : iList->second.list)
     {
@@ -490,9 +491,13 @@ ValidatorList::getJson() const
     if (auto when = expires())
     {
         if (*when == TimeKeeper::time_point::max())
+        {
             res[jss::validator_list_expires] = "never";
+        }
         else
+        {
             res[jss::validator_list_expires] = to_string(*when);
+        }
     }
     else
         res[jss::validator_list_expires] = "unknown";
@@ -506,7 +511,7 @@ ValidatorList::getJson() const
     {
         for (auto const& key : it->second.list)
             jLocalStaticKeys.append(
-                toBase58(TokenType::TOKEN_NODE_PUBLIC, key));
+                toBase58(TokenType::NodePublic, key));
     }
 
     // Publisher lists
@@ -528,7 +533,7 @@ ValidatorList::getJson() const
         Json::Value& keys = (curr[jss::list] = Json::arrayValue);
         for (auto const& key : p.second.list)
         {
-            keys.append(toBase58(TokenType::TOKEN_NODE_PUBLIC, key));
+            keys.append(toBase58(TokenType::NodePublic, key));
         }
     }
 
@@ -537,7 +542,7 @@ ValidatorList::getJson() const
         (res[jss::trusted_validator_keys] = Json::arrayValue);
     for (auto const& k : trustedKeys_)
     {
-        jValidatorKeys.append(toBase58(TokenType::TOKEN_NODE_PUBLIC, k));
+        jValidatorKeys.append(toBase58(TokenType::NodePublic, k));
     }
 
     // signing keys
@@ -549,8 +554,8 @@ ValidatorList::getJson() const
             if (it != keyListings_.end())
             {
                 jSigningKeys[toBase58(
-                    TokenType::TOKEN_NODE_PUBLIC, manifest.masterKey)] =
-                    toBase58(TokenType::TOKEN_NODE_PUBLIC, manifest.signingKey);
+                    TokenType::NodePublic, manifest.masterKey)] =
+                    toBase58(TokenType::NodePublic, manifest.signingKey);
             }
         });
 
@@ -595,6 +600,142 @@ ValidatorList::calculateMinimumQuorum (
     // If/when the quorum is subsequently raised to/towards 80%, it becomes
     // harder to split the network (more safe) and easier to stall it (less live).
     return nListedKeys * 2/3 + 1;
+}
+
+TrustChanges
+ValidatorList::updateTrusted(hash_set<NodeID> const& seenValidators)
+{
+    boost::unique_lock<boost::shared_mutex> lock{mutex_};
+
+    // Check that lists from all configured publishers are available
+    bool allListsAvailable = true;
+
+    for (auto const& list : publisherLists_)
+    {
+        // Remove any expired published lists
+        if (TimeKeeper::time_point{} < list.second.expiration &&
+            list.second.expiration <= timeKeeper_.now())
+            removePublisherList(list.first);
+
+        if (! list.second.available)
+            allListsAvailable = false;
+    }
+
+    std::multimap<std::size_t, PublicKey> rankedKeys;
+    bool localKeyListed = false;
+
+    // "Iterate" the listed keys in random order so that the rank of multiple
+    // keys with the same number of listings is not deterministic
+    std::vector<std::size_t> indexes (keyListings_.size());
+    std::iota (indexes.begin(), indexes.end(), 0);
+    std::shuffle (indexes.begin(), indexes.end(), crypto_prng());
+
+    for (auto const& index : indexes)
+    {
+        auto const& val = std::next (keyListings_.begin(), index);
+
+        if (validatorManifests_.revoked (val->first))
+            continue;
+
+        if (val->first == localPubKey_)
+        {
+            localKeyListed = val->second > 1;
+            rankedKeys.insert (
+                std::pair<std::size_t,PublicKey>(
+                    std::numeric_limits<std::size_t>::max(), localPubKey_));
+        }
+        // If the total number of validators is too small, or
+        // no validations are being received, use all validators.
+        // Otherwise, do not use validators whose validations aren't
+        // being received.
+        else if (
+            keyListings_.size() < MINIMUM_RESIZEABLE_UNL ||
+            seenValidators.empty() ||
+            seenValidators.find(calcNodeID(val->first)) != seenValidators.end())
+        {
+            rankedKeys.insert (
+                std::pair<std::size_t,PublicKey>(val->second, val->first));
+        }
+    }
+
+    // This minimum quorum guarantees safe overlap with the trusted sets of
+    // other nodes using the same set of published lists.
+    std::size_t quorum = calculateMinimumQuorum (keyListings_.size(),
+        localPubKey_.size() && !localKeyListed);
+
+    JLOG (j_.debug()) <<
+        rankedKeys.size() << "  of " << keyListings_.size() <<
+        " listed validators eligible for inclusion in the trusted set";
+
+    auto size = rankedKeys.size();
+
+    // Require 80% quorum if there are lots of validators.
+    if (rankedKeys.size() > BYZANTINE_THRESHOLD)
+    {
+        // Use all eligible keys if there is only one trusted list
+        if (publisherLists_.size() == 1 ||
+                keyListings_.size() < MINIMUM_RESIZEABLE_UNL)
+        {
+            // Try to raise the quorum to at least 80% of the trusted set
+            quorum = std::max(quorum, size - size / 5);
+        }
+        else
+        {
+            // Reduce the trusted set size so that the quorum represents
+            // at least 80%
+            size = quorum * 1.25;
+        }
+    }
+
+    if (minimumQuorum_ && seenValidators.size() < quorum)
+    {
+        quorum = *minimumQuorum_;
+        JLOG (j_.warn())
+            << "Using unsafe quorum of "
+            << quorum_
+            << " as specified in the command line";
+    }
+
+    // Do not use achievable quorum until lists from all configured
+    // publishers are available
+    else if (! allListsAvailable)
+        quorum = std::numeric_limits<std::size_t>::max();
+
+    TrustChanges trustChanges;
+    {
+        hash_set<PublicKey> newTrustedKeys;
+        for (auto const& val : boost::adaptors::reverse(rankedKeys))
+        {
+            if (size <= newTrustedKeys.size())
+                break;
+            newTrustedKeys.insert(val.second);
+
+            if (trustedKeys_.erase(val.second) == 0)
+                trustChanges.added.insert(calcNodeID(val.second));
+        }
+
+        for (auto const& k : trustedKeys_)
+            trustChanges.removed.insert(calcNodeID(k));
+        trustedKeys_ = std::move(newTrustedKeys);
+    }
+
+    quorum_ = quorum;
+
+
+    JLOG(j_.debug()) << "Using quorum of " << quorum_ << " for new set of "
+                     << trustedKeys_.size() << " trusted validators ("
+                     << trustChanges.added.size() << " added, "
+                     << trustChanges.removed.size() << " removed)";
+
+    if (trustedKeys_.size() < quorum_)
+    {
+        JLOG (j_.warn()) <<
+            "New quorum of " << quorum_ <<
+            " exceeds the number of trusted validators (" <<
+            trustedKeys_.size() << ")";
+    }
+
+    return trustChanges;
 }
 
 } // ripple

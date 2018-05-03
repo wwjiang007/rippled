@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/app/main/Application.h>
 #include <ripple/core/DatabaseCon.h>
 #include <ripple/app/consensus/RCLValidations.h>
@@ -47,6 +46,7 @@
 #include <ripple/app/tx/apply.h>
 #include <ripple/basics/ResolverAsio.h>
 #include <ripple/basics/Sustain.h>
+#include <ripple/basics/PerfLog.h>
 #include <ripple/json/json_reader.h>
 #include <ripple/nodestore/DummyScheduler.h>
 #include <ripple/overlay/Cluster.h>
@@ -270,7 +270,7 @@ private:
         void operator() (Duration const& elapsed)
         {
             using namespace std::chrono;
-            auto const lastSample = ceil<milliseconds>(elapsed);
+            auto const lastSample = date::ceil<milliseconds>(elapsed);
 
             lastSample_ = lastSample;
 
@@ -307,6 +307,7 @@ public:
     std::unique_ptr<TimeKeeper> timeKeeper_;
 
     beast::Journal m_journal;
+    std::unique_ptr<perf::PerfLog> perfLog_;
     Application::MutexType m_masterMutex;
 
     // Required by the SHAMapStore
@@ -400,6 +401,11 @@ public:
 
         , m_journal (logs_->journal("Application"))
 
+        // PerfLog must be started before any other threads are launched.
+        , perfLog_ (perf::make_PerfLog(
+            perf::setup_PerfLog(config_->section("perf"), config_->CONFIG_DIR),
+            *this, logs_->journal("PerfLog"), [this] () { signalStop(); }))
+
         , m_txMaster (*this)
 
         , m_nodeStoreScheduler (*this)
@@ -426,7 +432,7 @@ public:
         //
         , m_jobQueue (std::make_unique<JobQueue>(
             m_collectorManager->group ("jobq"), m_nodeStoreScheduler,
-            logs_->journal("JobQueue"), *logs_))
+            logs_->journal("JobQueue"), *logs_, *perfLog_))
 
         //
         // Anything which calls addJob must be a descendant of the JobQueue
@@ -489,7 +495,8 @@ public:
             get_io_service (), *validators_, logs_->journal("ValidatorSite")))
 
         , serverHandler_ (make_ServerHandler (*this, *m_networkOPs, get_io_service (),
-            *m_jobQueue, *m_networkOPs, *m_resourceManager, *m_collectorManager))
+            *m_jobQueue, *m_networkOPs, *m_resourceManager,
+            *m_collectorManager))
 
         , mFeeTrack (std::make_unique<LoadFeeTrack>(logs_->journal("LoadManager")))
 
@@ -497,8 +504,7 @@ public:
             stopwatch(), HashRouter::getDefaultHoldTime (),
             HashRouter::getDefaultRecoverLimit ()))
 
-        , mValidations (ValidationParms(),stopwatch(), logs_->journal("Validations"),
-            *this)
+        , mValidations (ValidationParms(),stopwatch(), *this, logs_->journal("Validations"))
 
         , m_loadManager (make_LoadManager (*this, *this, logs_->journal("LoadManager")))
 
@@ -653,6 +659,11 @@ public:
     TransactionMaster& getMasterTransaction () override
     {
         return m_txMaster;
+    }
+
+    perf::PerfLog& getPerfLog () override
+    {
+        return *perfLog_;
     }
 
     NodeCache& getTempNodeCache () override
@@ -916,7 +927,9 @@ public:
         // before we declare ourselves stopped.
         waitHandlerCounter_.join("Application", 1s, m_journal);
 
+        JLOG(m_journal.debug()) << "Flushing validations";
         mValidations.flush ();
+        JLOG(m_journal.debug()) << "Validations flushed";
 
         validatorSites_->stop ();
 
@@ -1061,6 +1074,7 @@ private:
     void addTxnSeqField();
     void addValidationSeqFields();
     bool updateTables ();
+    bool nodeToShards ();
     bool validateShards ();
     void startGenesisLedger ();
 
@@ -1268,8 +1282,15 @@ bool ApplicationImp::setup()
         *config_);
     add (*m_overlay); // add to PropertyStream
 
-    if (config_->valShards && !validateShards())
-        return false;
+    if (!config_->standalone())
+    {
+        // validation and node import require the sqlite db
+        if (config_->nodeToShard && !nodeToShards())
+            return false;
+
+        if (config_->validateShards && !validateShards())
+            return false;
+    }
 
     validatorSites_->start ();
 
@@ -1583,7 +1604,7 @@ ApplicationImp::loadLedgerFromFile (
             ledger = ledger.get()["accountState"];
         }
 
-        if (!ledger.get().isArray ())
+        if (!ledger.get().isArrayOrNull ())
         {
             JLOG(m_journal.fatal())
                << "State nodes must be an array";
@@ -1598,7 +1619,7 @@ ApplicationImp::loadLedgerFromFile (
         {
             Json::Value& entry = ledger.get()[index];
 
-            if (!entry.isObject())
+            if (!entry.isObjectOrNull())
             {
                 JLOG(m_journal.fatal())
                     << "Invalid entry in ledger";
@@ -1686,7 +1707,7 @@ bool ApplicationImp::loadOldLedger (
                 }
             }
         }
-        else if (ledgerID.empty () || boost::beast::detail::iequals(ledgerID, "latest"))
+        else if (ledgerID.empty () || beast::detail::iequals(ledgerID, "latest"))
         {
             loadLedger = getLastFullLedger ();
         }
@@ -2063,16 +2084,32 @@ bool ApplicationImp::updateTables ()
     return true;
 }
 
-bool ApplicationImp::validateShards()
+bool ApplicationImp::nodeToShards()
 {
-    if (!m_overlay)
-        Throw<std::runtime_error>("no overlay");
-    if(config_->standalone())
+    assert(m_overlay);
+    assert(!config_->standalone());
+
+    if (config_->section(ConfigSection::shardDatabase()).empty())
     {
-        JLOG(m_journal.fatal()) <<
-            "Shard validation cannot be run in standalone";
+        JLOG (m_journal.fatal()) <<
+            "The [shard_db] configuration setting must be set";
         return false;
     }
+    if (!shardStore_)
+    {
+        JLOG(m_journal.fatal()) <<
+            "Invalid [shard_db] configuration";
+        return false;
+    }
+    shardStore_->importNodeStore();
+    return true;
+}
+
+bool ApplicationImp::validateShards()
+{
+    assert(m_overlay);
+    assert(!config_->standalone());
+
     if (config_->section(ConfigSection::shardDatabase()).empty())
     {
         JLOG (m_journal.fatal()) <<

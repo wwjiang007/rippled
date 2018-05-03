@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/basics/contract.h>
 #include <ripple/json/json_reader.h>
 #include <algorithm>
@@ -124,7 +123,7 @@ Reader::parse ( const char* beginDoc, const char* endDoc,
     Token token;
     skipCommentTokens ( token );
 
-    if ( !root.isArray ()  &&  !root.isObject () )
+    if ( !root.isNull() && !root.isArray() && !root.isObject() )
     {
         // Set error location to start of doc, ideally should be first token found in doc
         token.type_ = tokenError;
@@ -392,7 +391,7 @@ Reader::readNumber ()
 
         while ( current_ != end_ )
         {
-            if (!std::isdigit (*current_))
+            if (!std::isdigit (static_cast<unsigned char>(*current_)))
             {
                 auto ret = std::find (std::begin (extended_tokens),
                     std::end (extended_tokens), *current_);

@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/nodestore/impl/ManagerImp.h>
 #include <ripple/nodestore/impl/DatabaseNodeImp.h>
 
@@ -72,18 +71,18 @@ ManagerImp::make_Database (
     Scheduler& scheduler,
     int readThreads,
     Stoppable& parent,
-    Section const& backendParameters,
+    Section const& config,
     beast::Journal journal)
 {
-    auto backend {make_Backend(
-        backendParameters, scheduler, journal)};
+    auto backend {make_Backend(config, scheduler, journal)};
     backend->open();
-    return std::make_unique <DatabaseNodeImp> (
+    return std::make_unique <DatabaseNodeImp>(
         name,
         scheduler,
         readThreads,
         parent,
         std::move(backend),
+        config,
         journal);
 }
 
@@ -111,7 +110,7 @@ ManagerImp::find (std::string const& name)
     auto const iter = std::find_if(list_.begin(), list_.end(),
         [&name](Factory* other)
         {
-            return boost::beast::detail::iequals(name, other->getName());
+            return beast::detail::iequals(name, other->getName());
         } );
     if (iter == list_.end())
         return nullptr;

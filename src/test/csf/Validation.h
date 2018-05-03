@@ -53,17 +53,23 @@ class Validation
     NetClock::time_point seenTime_;
     PeerKey key_;
     PeerID nodeID_{0};
-    bool trusted_ = true;
+    bool trusted_ = false;
+    bool full_ = false;
+    std::uint64_t cookie_;
     boost::optional<std::uint32_t> loadFee_;
 
 public:
+    using NodeKey = PeerKey;
+    using NodeID = PeerID;
+
     Validation(Ledger::ID id,
         Ledger::Seq seq,
         NetClock::time_point sign,
         NetClock::time_point seen,
         PeerKey key,
         PeerID nodeID,
-        bool trusted,
+        bool full,
+        std::uint64_t cookie,
         boost::optional<std::uint32_t> loadFee = boost::none)
         : ledgerID_{id}
         , seq_{seq}
@@ -71,7 +77,8 @@ public:
         , seenTime_{seen}
         , key_{key}
         , nodeID_{nodeID}
-        , trusted_{trusted}
+        , full_{full}
+        , cookie_{cookie}
         , loadFee_{loadFee}
     {
     }
@@ -118,6 +125,13 @@ public:
         return trusted_;
     }
 
+    bool
+    full() const
+    {
+        return full_;
+    }
+
+
     boost::optional<std::uint32_t>
     loadFee() const
     {
@@ -127,14 +141,31 @@ public:
     Validation const&
     unwrap() const
     {
+        // For the rippled implementation in which RCLValidation wraps
+        // STValidation, the csf::Validation has no more specific type it
+        // wraps, so csf::Validation unwraps to itself
         return *this;
+    }
+
+    std::uint64_t
+    cookie() const
+    {
+        return cookie_;
     }
 
     auto
     asTie() const
     {
-        return std::tie(ledgerID_, seq_, signTime_, seenTime_, key_, nodeID_,
-            trusted_, loadFee_);
+        // trusted is a status set by the receiver, so it is not part of the tie
+        return std::tie(
+            ledgerID_,
+            seq_,
+            signTime_,
+            seenTime_,
+            key_,
+            nodeID_,
+            loadFee_,
+            full_);
     }
     bool
     operator==(Validation const& o) const
@@ -152,6 +183,12 @@ public:
     setTrusted()
     {
         trusted_ = true;
+    }
+
+    void
+    setUntrusted()
+    {
+        trusted_ = false;
     }
 
     void

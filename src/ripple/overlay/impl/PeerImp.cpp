@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/overlay/impl/PeerImp.h>
 #include <ripple/overlay/impl/Tuning.h>
 #include <ripple/app/consensus/RCLValidations.h>
@@ -238,7 +237,7 @@ PeerImp::crawl() const
     auto const iter = headers_.find("Crawl");
     if (iter == headers_.end())
         return false;
-    return boost::beast::detail::iequals(iter->value(), "public");
+    return beast::detail::iequals(iter->value(), "public");
 }
 
 std::string
@@ -256,7 +255,7 @@ PeerImp::json()
     Json::Value ret (Json::objectValue);
 
     ret[jss::public_key]   = toBase58 (
-        TokenType::TOKEN_NODE_PUBLIC, publicKey_);
+        TokenType::NodePublic, publicKey_);
     ret[jss::address]      = remote_address_.to_string();
 
     if (m_inbound)
@@ -368,8 +367,9 @@ PeerImp::hasLedger (uint256 const& hash, std::uint32_t seq) const
     if (std::find(recentLedgers_.begin(),
             recentLedgers_.end(), hash) != recentLedgers_.end())
         return true;
-    return seq != 0 && boost::icl::contains(
-        shards_, NodeStore::DatabaseShard::seqToShardIndex(seq));
+    return seq >= app_.getNodeStore().earliestSeq() &&
+        boost::icl::contains(shards_,
+            (seq - 1) / NodeStore::DatabaseShard::ledgersPerShardDefault);
 }
 
 void
@@ -621,7 +621,7 @@ void PeerImp::doAccept()
 
     // TODO Apply headers to connection state.
 
-    boost::beast::ostream(write_buffer_) << makeResponse(
+    beast::ostream(write_buffer_) << makeResponse(
         ! overlay_.peerFinder().config().peerPrivate,
             request_, remote_address_, *sharedValue);
 
@@ -629,7 +629,7 @@ void PeerImp::doAccept()
     JLOG(journal_.info()) << "Protocol: " << to_string(protocol);
     JLOG(journal_.info()) <<
         "Public Key: " << toBase58 (
-            TokenType::TOKEN_NODE_PUBLIC,
+            TokenType::NodePublic,
             publicKey_);
     if (auto member = app_.cluster().member(publicKey_))
     {
@@ -669,8 +669,8 @@ PeerImp::makeResponse (bool crawl,
     uint256 const& sharedValue)
 {
     http_response_type resp;
-    resp.result(boost::beast::http::status::switching_protocols);
-    resp.version(req.version());
+    resp.result(beast::http::status::switching_protocols);
+    resp.version = req.version;
     resp.insert("Connection", "Upgrade");
     resp.insert("Upgrade", "RTXP/1.2");
     resp.insert("Connect-As", "Peer");
@@ -932,7 +932,7 @@ PeerImp::onMessage (std::shared_ptr <protocol::TMCluster> const& m)
             name = node.nodename();
 
         auto const publicKey = parseBase58<PublicKey>(
-            TokenType::TOKEN_NODE_PUBLIC, node.publickey());
+            TokenType::NodePublic, node.publickey());
 
         // NIKB NOTE We should drop the peer immediately if
         // they send us a public key we can't parse
@@ -1301,9 +1301,16 @@ PeerImp::onMessage (std::shared_ptr <protocol::TMProposeSet> const& m)
         "Proposal: " << (isTrusted ? "trusted" : "UNTRUSTED");
 
     auto proposal = RCLCxPeerPos(
-        publicKey, signature, suppression,
-        RCLCxPeerPos::Proposal{prevLedger, set.proposeseq (), proposeHash, closeTime,
-            app_.timeKeeper().closeTime(),calcNodeID(publicKey)});
+        publicKey,
+        signature,
+        suppression,
+        RCLCxPeerPos::Proposal{
+            prevLedger,
+            set.proposeseq(),
+            proposeHash,
+            closeTime,
+            app_.timeKeeper().closeTime(),
+            calcNodeID(app_.validatorManifests().getMasterKey(publicKey))});
 
     std::weak_ptr<PeerImp> weak = shared_from_this();
     app_.getJobQueue ().addJob (
@@ -1381,9 +1388,10 @@ PeerImp::onMessage (std::shared_ptr <protocol::TMStatusChange> const& m)
 
     if (m->has_shardseqs())
     {
-        shards_.clear();
         std::vector<std::string> tokens;
         boost::split(tokens, m->shardseqs(), boost::algorithm::is_any_of(","));
+        std::lock_guard<std::mutex> sl(recentLock_);
+        shards_.clear();
         for (auto const& t : tokens)
         {
             std::vector<std::string> seqs;
@@ -1610,8 +1618,13 @@ PeerImp::onMessage (std::shared_ptr <protocol::TMValidation> const& m)
         STValidation::pointer val;
         {
             SerialIter sit (makeSlice(m->validation()));
-            val = std::make_shared <
-                STValidation> (std::ref (sit), false);
+            val = std::make_shared<STValidation>(
+                std::ref(sit),
+                [this](PublicKey const& pk) {
+                    return calcNodeID(
+                        app_.validatorManifests().getMasterKey(pk));
+                },
+                false);
             val->setSeen (closeTime);
         }
 
@@ -1716,10 +1729,13 @@ PeerImp::onMessage (std::shared_ptr <protocol::TMGetObjectByHash> const& m)
                 //             need to inject the NodeStore interfaces.
                 std::uint32_t seq {obj.has_ledgerseq() ? obj.ledgerseq() : 0};
                 auto hObj {app_.getNodeStore ().fetch (hash, seq)};
-                if (!hObj && seq >= NodeStore::genesisSeq)
+                if (!hObj)
                 {
                     if (auto shardStore = app_.getShardStore())
-                        hObj = shardStore->fetch(hash, seq);
+                    {
+                        if (seq >= shardStore->earliestSeq())
+                            hObj = shardStore->fetch(hash, seq);
+                    }
                 }
                 if (hObj)
                 {
@@ -1953,8 +1969,7 @@ PeerImp::checkPropose (Job& job,
 
     if (isTrusted)
     {
-        app_.getOPs ().processTrustedProposal (
-            peerPos, packet, calcNodeID (publicKey_));
+        app_.getOPs ().processTrustedProposal (peerPos, packet);
     }
     else
     {
@@ -2031,8 +2046,8 @@ getPeerWithTree (OverlayImpl& ov,
     return ret;
 }
 
-// Returns the set of peers that claim
-// to have the specified ledger.
+// Returns a random peer weighted by how likely to
+// have the ledger and how responsive it is.
 //
 static
 std::shared_ptr<PeerImp>
@@ -2157,40 +2172,40 @@ PeerImp::getLedger (std::shared_ptr<protocol::TMGetLedger> const& m)
             logMe += to_string (ledgerhash);
             ledger = app_.getLedgerMaster ().getLedgerByHash (ledgerhash);
 
+            if (!ledger && packet.has_ledgerseq())
+            {
+                if (auto shardStore = app_.getShardStore())
+                {
+                    auto seq = packet.ledgerseq();
+                    if (seq >= shardStore->earliestSeq())
+                        ledger = shardStore->fetchLedger(ledgerhash, seq);
+                }
+            }
+
             if (!ledger)
             {
                 JLOG(p_journal_.trace()) <<
                     "GetLedger: Don't have " << ledgerhash;
             }
+
             if (!ledger && (packet.has_querytype () &&
                 !packet.has_requestcookie ()))
             {
-                std::uint32_t seq = 0;
-                if (packet.has_ledgerseq())
+                // We don't have the requested ledger
+                // Search for a peer who might
+                auto const v = getPeerWithLedger(overlay_, ledgerhash,
+                    packet.has_ledgerseq() ? packet.ledgerseq() : 0, this);
+                if (!v)
                 {
-                    seq = packet.ledgerseq();
-                    if (seq >= NodeStore::genesisSeq)
-                    {
-                        if (auto shardStore = app_.getShardStore())
-                            ledger = shardStore->fetchLedger(ledgerhash, seq);
-                    }
-                }
-                if (! ledger)
-                {
-                    auto const v = getPeerWithLedger(
-                        overlay_, ledgerhash, seq, this);
-                    if (! v)
-                    {
-                        JLOG(p_journal_.trace()) << "GetLedger: Cannot route";
-                        return;
-                    }
-
-                    packet.set_requestcookie (id ());
-                    v->send (std::make_shared<Message>(
-                        packet, protocol::mtGET_LEDGER));
-                    JLOG(p_journal_.debug()) << "GetLedger: Request routed";
+                    JLOG(p_journal_.trace()) << "GetLedger: Cannot route";
                     return;
                 }
+
+                packet.set_requestcookie (id ());
+                v->send (std::make_shared<Message>(
+                    packet, protocol::mtGET_LEDGER));
+                JLOG(p_journal_.debug()) << "GetLedger: Request routed";
+                return;
             }
         }
         else if (packet.has_ledgerseq ())

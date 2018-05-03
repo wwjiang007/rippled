@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 
 #include <ripple/basics/impl/BasicConfig.cpp>
 #include <ripple/basics/impl/CheckLibraryVersions.cpp>
@@ -26,11 +25,11 @@
 #include <ripple/basics/impl/Log.cpp>
 #include <ripple/basics/impl/make_SSLContext.cpp>
 #include <ripple/basics/impl/mulDiv.cpp>
+#include <ripple/basics/impl/PerfLogImp.cpp>
 #include <ripple/basics/impl/ResolverAsio.cpp>
 #include <ripple/basics/impl/strHex.cpp>
 #include <ripple/basics/impl/StringUtilities.cpp>
 #include <ripple/basics/impl/Sustain.cpp>
-#include <ripple/basics/impl/Time.cpp>
 #include <ripple/basics/impl/UptimeTimer.cpp>
 
 #if DOXYGEN

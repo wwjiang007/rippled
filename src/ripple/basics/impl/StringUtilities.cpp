@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/basics/contract.h>
 #include <ripple/basics/Slice.h>
 #include <ripple/basics/StringUtilities.h>
@@ -121,6 +120,15 @@ std::string trim_whitespace (std::string str)
 {
     boost::trim (str);
     return str;
+}
+
+boost::optional<std::uint64_t>
+to_uint64(std::string const& s)
+{
+    std::uint64_t result;
+    if (beast::lexicalCastChecked (result, s))
+        return result;
+    return boost::none;
 }
 
 } // ripple
